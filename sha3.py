@@ -1,41 +1,18 @@
 import numpy as np
-from math import log2
+import numba
+import time
 
-
-def bits_to_bytes(A):
-    bits = np.zeros((5, 5), dtype=np.uint64)
-    for x in range(5):
-        for y in range(5):
-            n = 0
-            for i in range(64):
-                n |= (int(A[x][y][i]) << i)
-            bits[x][y] = n
-    return bits
-
-def bytes_to_bits(A):
-    bs = np.zeros((5,5,64), bool)
-    for x in range(5):
-        for y in range(5):
-            for w in range(64):
-                bs[x][y][w] = ((int(A[x][y]) >> w) & 1) != 0
-    return bs
-
-def dbg_print_3d(A):
-    # def conv(arr):
-    #     n = 0
-    #     for i in range(0, 64):
-    #         n |= (int(arr[i]) << i)
-    #     return n
-    # arr = list([list((conv(y) for y in x)) for x in A])
-    # print(arr)
-    pass
 
 
 # rotate (positive = left)
+@numba.jit
 def rot64(a, n):
-    a = int(a)
-    return np.uint64(((a >> (64 - (n % 64))) + (a << (n % 64))) % (1 << 64))
+    a = np.uint64(a)
+    n = np.uint64(n)
+    return np.uint64((a >> np.uint64((64 - (n % 64)))) + (a << np.uint64(n % 64)))
 
+
+@numba.jit
 def keccak_p(nr: int, S: np.zeros):
     b = S.size * 64
 
@@ -54,7 +31,7 @@ def keccak_p(nr: int, S: np.zeros):
         for x in range(5):
                 C[x] = A[x, 0] ^ A[x, 1] ^ A[x, 2] ^ A[x, 3] ^ A[x, 4]
         for x in range(5):
-                D[x] = C[(x-1) % 5] ^ rot64(C[(x+1) % 5], 1)
+            D[x] = C[(x-1) % 5] ^ np.uint64(rot64(C[(x+1) % 5], 1))
         for x in range(5):
             for y in range(5):
                     A[x,y] = A[x,y] ^ D[x]
@@ -122,16 +99,18 @@ def keccak_p(nr: int, S: np.zeros):
                 S_[(5*y + x)] = A[x,y]
     return S_
 
+@numba.jit
 def pad101(x: int, m: int):
     j = (-m - 2) % x
-    return np.array([True] + [False] * j + [True], bool)
+    return np.array([1] + [0] * j + [1], np.uint8)
 
 
 
 # SHA3-512(M) = KECCAK[1024] (M || 01, 512)
 # KECCAK[c] (N, d) = SPONGE[KECCAK-p[1600, 24], pad10*1, 1600 – c] (N, d)
 
-def sponge(r: int, N: np.array, d: int):
+@numba.jit(nopython=True)
+def sponge(r, N, d):
     # print(f'r = {r}')
     padding = pad101(r, N.size)
     P_bits = np.concatenate((N, padding))
@@ -161,32 +140,36 @@ def sponge(r: int, N: np.array, d: int):
             return Z[:d]
         S = keccak_p(24, S)
 
+
 def sha3_512(b: bytes):
-    M = np.zeros((len(b)*8 + 2), bool)
+    M = np.zeros((len(b)*8 + 2), np.uint8)
     for offset in range(len(b)):
         for i in range(8):
-            M[offset * 8 + i] = ((b[offset] >> i) & 0b1 ) != 0
-    M[-1] = True
-    M[-2] = False
+            M[offset * 8 + i] = ((b[offset] >> i) & 0b1 )
+    M[-1] = 1
+    M[-2] = 0
     c=1024
     R = sponge(1600 - c, M, 512)
     # print(R.size)
-    res = bytearray()
-    for i in R[:512//64]:
-        res += bytearray(int(i).to_bytes(8, byteorder='little', signed=False))
+    res = R[:512//64].tobytes()
+    # for i in R[:512//64]:
+        # res += bytearray(int(i).to_bytes(8, byteorder='little', signed=False))
     return(res)
 
 
 import hashlib
 
 def test_sha(s):
+    start_time = time.time()
     my = sha3_512(s).hex()
+    finish_time = time.time()
+    
     from_hashlib = hashlib.sha3_512(s).hexdigest()
-    print()
+    print(f'time    = {finish_time - start_time}')
     print(f'my      = {my}')
     print(f'hashlib = {from_hashlib}')
     print(f'match   = {my == from_hashlib}')
 
-test_sha(b'hello'*1024)
+test_sha(b'E'*1024*1024)
 
 # TODO: run on 1 meg of input (should take approximately 85 minutes)
